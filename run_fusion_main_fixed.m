@@ -1,12 +1,12 @@
 % run_fusion_main_fixed.m
-% One-click launcher for the confirmed-association metric hotfix.
+% One-click launcher for the latest joint-tracking fixes.
 %
-% First patch evaluate_joint_tracking_metrics.m in-place, then execute the
-% original run_fusion_main.m. No +package directory or extra MATLAB path is
-% required after the patch.
+% The 3D->2D degradation logic is now implemented directly inside
+% run_filter_joint_2d3d.m. This launcher only applies the independent
+% confirmed-association metric correction before running the original main.
 
 root = fileparts(mfilename('fullpath'));
 apply_confirmed_association_fix(fullfile(root, 'evaluate_joint_tracking_metrics.m'));
-clear evaluate_joint_tracking_metrics;
+clear evaluate_joint_tracking_metrics run_filter_joint_2d3d config_fusion validate_config_fusion;
 rehash;
 run(fullfile(root, 'run_fusion_main.m'));
