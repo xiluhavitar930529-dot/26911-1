@@ -164,6 +164,9 @@ cfg = set_default(cfg, 'joint_pos95_recover_m', 10000);
 cfg = set_default(cfg, 'joint_radial95_warn_m', 10000);
 cfg = set_default(cfg, 'joint_radial95_down_m', 20000);
 cfg = set_default(cfg, 'joint_radial95_recover_m', 7000);
+cfg = set_default(cfg, 'joint_active3d_missing_warn_s', 0.20);
+cfg = set_default(cfg, 'joint_active3d_missing_down_s', 0.30);
+cfg = set_default(cfg, 'joint_active3d_missing_recover_s', 0.15);
 cfg = set_default(cfg, 'joint_switch_gate_2d', 9.2103);
 cfg = set_default(cfg, 'joint_switch_cov_inflate', 2.0);
 cfg = set_default(cfg, 'joint_relative_range_down', 0.60);
@@ -360,6 +363,9 @@ must_be_positive(cfg.joint_pos95_down_m, 'cfg.joint_pos95_down_m');
 must_be_nonnegative(cfg.joint_radial95_recover_m, 'cfg.joint_radial95_recover_m');
 must_be_positive(cfg.joint_radial95_warn_m, 'cfg.joint_radial95_warn_m');
 must_be_positive(cfg.joint_radial95_down_m, 'cfg.joint_radial95_down_m');
+must_be_nonnegative(cfg.joint_active3d_missing_recover_s, 'cfg.joint_active3d_missing_recover_s');
+must_be_positive(cfg.joint_active3d_missing_warn_s, 'cfg.joint_active3d_missing_warn_s');
+must_be_positive(cfg.joint_active3d_missing_down_s, 'cfg.joint_active3d_missing_down_s');
 must_be_nonnegative(cfg.joint_space_nis_recover, 'cfg.joint_space_nis_recover');
 must_be_positive(cfg.joint_space_nis_warn, 'cfg.joint_space_nis_warn');
 must_be_positive(cfg.joint_space_nis_down, 'cfg.joint_space_nis_down');
@@ -369,7 +375,11 @@ if ~(cfg.joint_pos95_recover_m < cfg.joint_pos95_warn_m && ...
 end
 if ~(cfg.joint_radial95_recover_m < cfg.joint_radial95_warn_m && ...
         cfg.joint_radial95_warn_m < cfg.joint_radial95_down_m)
-    error('径向误差门限要求 recover < warn < down');
+    error('距离95%不确定度门限要求 recover < warn < down');
+end
+if ~(cfg.joint_active3d_missing_recover_s < cfg.joint_active3d_missing_warn_s && ...
+        cfg.joint_active3d_missing_warn_s < cfg.joint_active3d_missing_down_s)
+    error('主动三维量测缺失时间门限要求 recover < warn < down');
 end
 if ~(cfg.joint_space_nis_recover < cfg.joint_space_nis_warn && ...
         cfg.joint_space_nis_warn < cfg.joint_space_nis_down)
