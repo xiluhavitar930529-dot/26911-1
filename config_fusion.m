@@ -303,18 +303,26 @@ cfg.joint_quality_eval_interval_s = 0.10; % 无主动扫描时质量评估最小
 cfg.joint_switch_gate_2d = 9.2103;       % 模式切换角度一致门
 cfg.joint_switch_cov_inflate = 2.0;      % 模式切换协方差膨胀
 
-cfg.joint_pos95_warn_m = 15000;          % 位置95%不确定度预警门[m]
-cfg.joint_pos95_down_m = 30000;          % 位置95%不确定度降级门[m]
-cfg.joint_pos95_recover_m = 10000;       % 位置95%不确定度恢复门[m]
-cfg.joint_radial95_warn_m = 10000;       % 径向95%不确定度预警门[m]
-cfg.joint_radial95_down_m = 20000;       % 径向95%不确定度降级门[m]
-cfg.joint_radial95_recover_m = 7000;     % 径向95%不确定度恢复门[m]
-cfg.joint_relative_range_down = 0.60;    % 相对距离不确定度降级门
+% 3D->2D直接控制指标：
+%   1) LOS径向距离95%不确定度；
+%   2) 距最近一次“带距离主动三维更新”的缺失时间。
+% 两者任一达到down门，连续 joint_down_consecutive 次后进入降维提交判断。
+cfg.joint_radial95_warn_m = 10000;       % 距离95%不确定度预警门[m]
+cfg.joint_radial95_down_m = 20000;       % 距离95%不确定度降级门[m]
+cfg.joint_radial95_recover_m = 7000;     % 距离95%不确定度恢复门[m]
+cfg.joint_active3d_missing_warn_s = 0.20;    % 主动三维距离量测缺失预警[s]
+cfg.joint_active3d_missing_down_s = 0.30;    % 主动三维距离量测缺失降级[s]
+cfg.joint_active3d_missing_recover_s = 0.15; % 主动三维距离量测恢复新鲜度[s]
 
-cfg.joint_space_nis_window = 5;          % 空间NIS滑窗长度
-cfg.joint_space_nis_recover = 1.5;       % 空间NIS恢复门
-cfg.joint_space_nis_warn = 2.5;          % 空间NIS预警门
-cfg.joint_space_nis_down = 4.0;          % 空间NIS降级门
+% 以下指标继续计算，供诊断/绘图使用，但不直接触发3D->2D。
+cfg.joint_pos95_warn_m = 15000;          % 位置95%不确定度诊断预警门[m]
+cfg.joint_pos95_down_m = 30000;          % 位置95%不确定度诊断门[m]
+cfg.joint_pos95_recover_m = 10000;       % 位置95%不确定度诊断恢复门[m]
+cfg.joint_relative_range_down = 0.60;    % 相对距离不确定度诊断门
+cfg.joint_space_nis_window = 5;          % 空间NIS诊断滑窗长度
+cfg.joint_space_nis_recover = 1.5;       % 空间NIS诊断恢复门
+cfg.joint_space_nis_warn = 2.5;          % 空间NIS诊断预警门
+cfg.joint_space_nis_down = 4.0;          % 空间NIS诊断门
 cfg.joint_shadow_max_s = 20;             % 降维后三维影子状态最长保留时间[s]
 cfg.joint_mode_3d_prior_cost = 0.5;       % 通用空间分支三维关联优先代价
 
