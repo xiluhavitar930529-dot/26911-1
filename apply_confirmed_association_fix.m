@@ -117,14 +117,14 @@ if ~exist(backup, 'file')
     fid = fopen(backup, 'w', 'n', 'UTF-8');
     assert(fid >= 0, '无法创建备份文件: %s', backup);
     cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
-    fwrite(fid, text, 'char');
+    fprintf(fid, '%s', text);
     clear cleanup;
 end
 
 fid = fopen(target_file, 'w', 'n', 'UTF-8');
 assert(fid >= 0, '无法写入评价器: %s', target_file);
 cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
-fwrite(fid, new_text, 'char');
+fprintf(fid, '%s', new_text);
 clear cleanup;
 
 clear evaluate_joint_tracking_metrics;
