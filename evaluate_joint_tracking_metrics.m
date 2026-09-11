@@ -16,8 +16,9 @@ confirmed_ids = collect_confirmed_ids(est, data.output_track);
 
 metrics = struct();
 metrics.mode = 'joint_2d3d';
-metrics.evaluation_version = 2;
+metrics.evaluation_version = 3;
 metrics.status = 'ok';
+metrics.confirmed_track_ids = confirmed_ids;
 metrics.truth_targets = truth_labels.summary;
 metrics.id_split = metrics.truth_targets;
 metrics.two_d = build_scope_metrics(data, 2, confirmed_ids, cfg);
@@ -217,12 +218,18 @@ end
 end
 
 function m = association_metrics(n_meas, assigned_ids, confirmed_ids)
-n_assigned = numel(assigned_ids);
-n_confirmed = nnz(ismember(assigned_ids, confirmed_ids));
-m = struct('basis', 'measurement_dimension', ...
+% “曾确认”口径：量测只要被分配给一条在完整生命周期中曾进入 confirmed
+% 状态的逻辑航迹，就计入分子；不要求该量测发生时航迹已经确认。
+assigned_ids = reshape(assigned_ids, 1, []);
+confirmed_ids = unique(reshape(confirmed_ids, 1, []));
+valid_assigned = isfinite(assigned_ids);
+n_assigned = nnz(valid_assigned);
+n_confirmed = nnz(valid_assigned & ismember(assigned_ids, confirmed_ids));
+m = struct('basis', 'measurement_dimension_assigned_to_ever_confirmed_logical_track', ...
     'n_measurements', n_meas, ...
     'n_assigned', n_assigned, ...
     'n_assigned_confirmed', n_confirmed, ...
+    'n_unique_confirmed_track_ids', numel(confirmed_ids), ...
     'rate_all_tracks', safe_ratio(n_assigned, n_meas), ...
     'rate_confirmed_tracks', safe_ratio(n_confirmed, n_meas), ...
     'n_mode_assigned', 0);
@@ -305,8 +312,6 @@ m = struct('purity_threshold', purity_th, ...
 end
 
 function d = summarize_track_coverage(coverage)
-% Distribution over matched output tracks only. Unmatched/extra tracks remain
-% visible in n_error_or_extra_tracks and accuracy_vs_output.
 values = coverage(isfinite(coverage));
 d = struct('basis', 'matched_output_tracks', 'n_tracks', numel(values), ...
     'mean', NaN, 'median', NaN, ...
@@ -693,7 +698,7 @@ elseif dim == 3
     fprintf('  三维带标签RAE参考=%d（被动AE不参与三维得分计数）\n', ...
         s.reference.n_labeled_measurements);
 end
-fprintf('  量测关联率(全部/曾确认): %.2f%% / %.2f%%  (%d/%d, %d/%d)\n', ...
+fprintf('  量测关联率(全部/分配至曾确认航迹): %.2f%% / %.2f%%  (%d/%d, %d/%d)\n', ...
     100 * s.association.rate_all_tracks, 100 * s.association.rate_confirmed_tracks, ...
     s.association.n_assigned, s.association.n_measurements, ...
     s.association.n_assigned_confirmed, s.association.n_measurements);
@@ -828,7 +833,6 @@ dims = retained_dims;
 if isfield(a, 'input_dim') && numel(a.input_dim) == numel(dims)
     dims = reshape(a.input_dim, 1, []);
 else
-    % A legacy passive birth with no retained track still entered the 2-D branch.
     for q = find(dims == 0)
         if strcmp(indexed_text(a, 'type', q, ''), 'passive_birth'), dims(q) = 2; end
     end
@@ -1181,15 +1185,16 @@ end
 end
 
 function ids = collect_confirmed_ids(est, fallback_output_ids)
-ids = zeros(1, 0);
+% CONFIRMED_ASSOCIATION_DIRECT_FIX_V3
+% “曾确认”必须按逻辑航迹完整生命周期回溯。任何单一日志源都不能作为
+% 排他来源：成熟3D主干可能直接形成正式输出，而维度管理器 transition_log
+% 未必记录该3D ID的首次确认。因此对所有可靠确认依据取并集。
+ids = reshape(fallback_output_ids, 1, []);
 
-% Current joint-filter results retain transition_log independently of
-% history_level. The logical_confirm_* transitions are therefore the
-% authoritative source for logical IDs that have ever reached confirmed
-% state, including a track confirmed directly into hold without output.
+% 显式 logical_confirm_* 事件：补充 confirmed-into-hold 等未正式输出情况。
 if isstruct(est) && isfield(est, 'transition_log') && ~isempty(est.transition_log)
     log = est.transition_log;
-    if isfield(log, 'id') && isfield(log, 'reason')
+    if isstruct(log) && isfield(log, 'id') && isfield(log, 'reason')
         reasons = {log.reason};
         is_confirm = false(size(reasons));
         for q = 1:numel(reasons)
@@ -1197,33 +1202,45 @@ if isstruct(est) && isfield(est, 'transition_log') && ~isempty(est.transition_lo
             is_confirm(q) = ischar(reason) && strncmp(reason, 'logical_confirm_', 16);
         end
         if any(is_confirm)
-            ids = reshape([log(is_confirm).id], 1, []);
+            ids = [ids, reshape([log(is_confirm).id], 1, [])]; %#ok<AGROW>
         end
     end
 end
 
-% Compatibility fallback for older or synthetic estimates that do not
-% contain confirmation transitions but do retain diagnostic/full snapshots.
-if isempty(ids) && isstruct(est) && isfield(est, 'logical_tracks')
-    counts = zeros(numel(est.logical_tracks), 1);
+% full/diagnostic history 中所有 confirmed snapshots。
+if isstruct(est) && isfield(est, 'logical_tracks') && ~isempty(est.logical_tracks)
     for k = 1:numel(est.logical_tracks)
         tracks = est.logical_tracks{k};
-        if isempty(tracks) || ~isfield(tracks, 'id') || ~isfield(tracks, 'confirmed')
+        if isempty(tracks) || ~isstruct(tracks) || ...
+                ~isfield(tracks, 'id') || ~isfield(tracks, 'confirmed')
             continue;
         end
-        counts(k) = nnz(logical([tracks.confirmed]));
-    end
-    ids = nan(1, sum(counts)); p = 0;
-    for k = 1:numel(est.logical_tracks)
-        if counts(k) == 0, continue; end
-        tracks = est.logical_tracks{k}; confirmed = logical([tracks.confirmed]);
-        values = reshape([tracks(confirmed).id], 1, []);
-        ii = p + (1:numel(values)); ids(ii) = values; p = p + numel(values);
+        confirmed = logical([tracks.confirmed]);
+        if any(confirmed)
+            ids = [ids, reshape([tracks(confirmed).id], 1, [])]; %#ok<AGROW>
+        end
     end
 end
-if isempty(ids)
-    ids = fallback_output_ids;
+
+% L/L2 均为正式输出标签；兼容 Nx2 与 2xN 两种标签矩阵布局。
+for name_cell = {'L', 'L2'}
+    name = name_cell{1};
+    if ~isstruct(est) || ~isfield(est, name) || isempty(est.(name)), continue; end
+    cells = est.(name);
+    for k = 1:numel(cells)
+        L = cells{k};
+        if isempty(L), continue; end
+        if size(L, 2) == 2
+            values = reshape(L(:, 2), 1, []);
+        elseif size(L, 1) == 2
+            values = reshape(L(2, :), 1, []);
+        else
+            continue;
+        end
+        ids = [ids, values]; %#ok<AGROW>
+    end
 end
+
 ids = unique(ids(isfinite(ids)));
 end
 
