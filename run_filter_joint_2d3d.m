@@ -44,6 +44,11 @@ fprintf('  空间角度预测缓存=%d, 进度间隔=%d事件\n', ...
     p.projection_cache_enabled, p.progress_interval_events);
 fprintf('  三维伴随被动验收: NIS<=%.2f, 方位/俯仰残差<=%.3fdeg\n', ...
     p.accept_nis_3d_companion, p.fast_gate_3d_companion_deg);
+fprintf(['  3D->2D控制: 距离95%%不确定度 warn/down/recover=%.0f/%.0f/%.0fm, ' ...
+    '主动3D缺失 warn/down/recover=%.2f/%.2f/%.2fs\n'], ...
+    p.radial95_warn_m, p.radial95_down_m, p.radial95_recover_m, ...
+    p.active3d_missing_warn_s, p.active3d_missing_down_s, ...
+    p.active3d_missing_recover_s);
 
 end
 t_start = tic;
@@ -477,7 +482,7 @@ state.schema_version = stream_schema_version();
 end
 
 function version = stream_schema_version()
-version = 7;
+version = 8;
 end
 
 function tracks = upgrade_track_array(tracks, template)
@@ -546,6 +551,12 @@ p.pos95_recover_m = get_cfg(cfg, 'joint_pos95_recover_m', 10000);
 p.radial95_warn_m = get_cfg(cfg, 'joint_radial95_warn_m', 10000);
 p.radial95_down_m = get_cfg(cfg, 'joint_radial95_down_m', 20000);
 p.radial95_recover_m = get_cfg(cfg, 'joint_radial95_recover_m', 7000);
+% 3D->2D direct control indicator #2: elapsed time since the most recent
+% range-capable active 3-D update. Active AE-only does not refresh this.
+p.active3d_missing_warn_s = get_cfg(cfg, 'joint_active3d_missing_warn_s', 0.20);
+p.active3d_missing_down_s = get_cfg(cfg, 'joint_active3d_missing_down_s', 0.30);
+p.active3d_missing_recover_s = get_cfg(cfg, 'joint_active3d_missing_recover_s', 0.15);
+% Legacy quality quantities remain available for diagnostics only.
 p.relative_range_down = get_cfg(cfg, 'joint_relative_range_down', 0.60);
 p.space_nis_window = get_cfg(cfg, 'joint_space_nis_window', 5);
 p.space_nis_recover = get_cfg(cfg, 'joint_space_nis_recover', 1.5);
@@ -1783,9 +1794,10 @@ for q = 1:numel(update_ids)
     end
     companions(i).last_update_t = t;
     companions(i).last_angle_observation_t = t;
-    if update_kind(q) == 2
-        companions(i).last_active_t = t;
-    else
+    % update_kind==2 is active AE-only. It carries no range and therefore
+    % must NOT reset the active 3-D missing timer. Only the mature 3-D
+    % backbone last_active_t above is authoritative for range-capable hits.
+    if update_kind(q) ~= 2
         companions(i).last_passive_t = t;
     end
 end
@@ -2579,22 +2591,35 @@ if tr.space.valid
     if q.range_m > 0, u = rel / q.range_m; else, u = [1; 0; 0]; end
     q.radial_sigma_m = sqrt(max(u' * Pp * u, 0));
     q.radial95_m = 1.96 * q.radial_sigma_m;
+
+    % The following quantities are retained for diagnostics only.
     q.position95_m = sqrt(7.8147279 * max(real(eig(Pp))));
     q.relative_range_sigma = q.radial_sigma_m / max(q.range_m, 1);
     nh = tr.space.nis_norm_history;
     nh = nh(max(1, end - p.space_nis_window + 1):end);
     nh = nh(isfinite(nh));
     if ~isempty(nh), q.nis_norm = median(nh); end
-    nis_warn = isfinite(q.nis_norm) && q.nis_norm > p.space_nis_warn;
-    nis_down = isfinite(q.nis_norm) && q.nis_norm > p.space_nis_down;
-    nis_recover = ~isfinite(q.nis_norm) || q.nis_norm <= p.space_nis_recover;
-    q.warn3d = q.position95_m > p.pos95_warn_m || ...
-        q.radial95_m > p.radial95_warn_m || nis_warn;
-    q.down3d = q.position95_m > p.pos95_down_m || q.radial95_m > p.radial95_down_m || ...
-        q.relative_range_sigma > p.relative_range_down || nis_down;
+
+    % 3D->2D control indicator #2: elapsed time since the most recent
+    % range-capable active 3-D update. tr.last_t is current decision time.
+    if isfinite(tr.last_t) && isfinite(tr.last_active_t)
+        q.active3d_missing_s = max(tr.last_t - tr.last_active_t, 0);
+    else
+        q.active3d_missing_s = inf;
+    end
+
+    % Direct 3D->2D control now uses ONLY:
+    %   (1) radial/range 95% uncertainty; and
+    %   (2) active 3-D measurement missing time.
+    q.down_by_range_uncertainty = q.radial95_m > p.radial95_down_m;
+    q.down_by_active3d_missing = ...
+        q.active3d_missing_s > p.active3d_missing_down_s;
+    q.warn3d = q.radial95_m > p.radial95_warn_m || ...
+        q.active3d_missing_s > p.active3d_missing_warn_s;
+    q.down3d = q.down_by_range_uncertainty || q.down_by_active3d_missing;
     q.valid3d = ~q.down3d;
-    q.recover3d = q.position95_m <= p.pos95_recover_m && ...
-        q.radial95_m <= p.radial95_recover_m && nis_recover;
+    q.recover3d = q.radial95_m <= p.radial95_recover_m && ...
+        q.active3d_missing_s <= p.active3d_missing_recover_s;
 end
 if tr.angle.valid && tr.space.valid
     z2 = tr.angle.x([1, 4]); P2 = tr.angle.P([1, 4], [1, 4]);
@@ -2633,6 +2658,9 @@ q = struct('valid2d', false, 'valid3d', false, 'warn3d', false, ...
     'observed2d', false, ...
     'angle95_deg', inf, 'position95_m', inf, 'radial_sigma_m', inf, ...
     'radial95_m', inf, 'relative_range_sigma', inf, 'range_m', NaN, ...
+    'active3d_missing_s', inf, ...
+    'down_by_range_uncertainty', false, ...
+    'down_by_active3d_missing', false, ...
     'switch_nis', inf, 'nis_norm', NaN);
 end
 
